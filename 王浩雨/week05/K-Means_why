@@ -1,0 +1,197 @@
+import pprint  # 用于美化打印输出，方便调试
+import numpy as np  # 用于数值计算，特别是数组操作
+import random  # 用于生成随机数，例如随机选择初始聚类中心
+import sys  # 提供访问由解释器使用或维护的变量和函数的功能，在此处可能用于设置递归深度等，但在此代码中未使用
+
+class KMeansClusterer:  # K-Means聚类器类
+    """
+    实现K-Means聚类算法的类。
+
+    K-Means是一种迭代算法，用于将数据集划分为K个簇，
+    其中K是用户指定的。算法的目标是使每个数据点到其所属簇中心的距离的平方和最小。
+    """
+
+    def __init__(self, data_points, num_clusters):
+        """
+        初始化KMeansClusterer。
+
+        Args:
+            data_points (np.ndarray): 输入的Numpy数组，包含需要聚类的数据点。
+                                      每行代表一个数据点，每列代表一个特征。
+            num_clusters (int): 要形成的簇的数量 (K)。
+        """
+        if not isinstance(data_points, np.ndarray):
+            raise TypeError("data_points 必须是 Numpy 数组。")
+        if not isinstance(num_clusters, int) or num_clusters <= 0:
+            raise ValueError("num_clusters 必须是正整数。")
+        if data_points.shape[0] < num_clusters:
+            raise ValueError("数据点的数量不能少于簇的数量。")
+
+        self.data_points = data_points  # 存储输入的数据点
+        self.num_clusters = num_clusters  # 存储指定的簇数量
+        # 随机选择初始聚类中心点
+        self.cluster_centers = self.__select_initial_centers(data_points, num_clusters)
+
+    def cluster(self):
+        """
+        执行K-Means聚类算法。
+
+        算法迭代地分配数据点到最近的聚类中心，然后重新计算聚类中心，
+        直到聚类中心收敛或达到最大迭代次数。
+
+        Returns:
+            list: 一个列表，其中每个元素代表一个簇。
+                  每个簇的格式为 (points_in_cluster, average_distance, center)。
+                  - points_in_cluster: 属于该簇的所有数据点的列表。
+                  - average_distance: 该簇内所有点到其中心的平均距离。
+                  - center: 该簇的最终中心点。
+        """
+        max_iterations = 100  # 最大迭代次数，防止无限循环
+        iteration_count = 0  # 当前迭代次数
+
+        while iteration_count < max_iterations:
+            # 1. 分配数据点到最近的聚类中心
+            # results 是一个列表的列表，每个内部列表对应一个聚类中心，存储属于该中心的点
+            grouped_points = [[] for _ in range(self.num_clusters)]
+            for point in self.data_points:
+                min_distance_to_center = float('inf')  # 初始化最小距离为无穷大
+                assigned_cluster_index = -1  # 初始化分配的簇索引
+
+                # 找到离当前点最近的聚类中心
+                for center_index, center in enumerate(self.cluster_centers):
+                    distance = self.__calculate_euclidean_distance(point, center)
+                    if distance < min_distance_to_center:
+                        min_distance_to_center = distance
+                        assigned_cluster_index = center_index
+                # 将当前点添加到其所属簇的列表中
+                grouped_points[assigned_cluster_index].append(point)
+
+            # 2. 重新计算聚类中心
+            new_cluster_centers = []
+            for cluster_points in grouped_points:
+                # 如果某个簇为空，则不更新其中心（或者可以有其他处理策略）
+                if not cluster_points:
+                    # 保持原中心，或者随机选择一个点作为新的中心
+                    # 这里选择保持原中心，但更鲁棒的做法是随机选择一个点
+                    new_cluster_centers.append(self.cluster_centers[len(new_cluster_centers)])
+                    continue
+                # 计算簇内所有点的平均值作为新的中心
+                center = np.mean(cluster_points, axis=0)
+                new_cluster_centers.append(center)
+
+            # 3. 检查收敛条件
+            # np.allclose 比较两个数组是否“大致相等”，容差由 atol 控制
+            if np.allclose(new_cluster_centers, self.cluster_centers, atol=1e-8):
+                self.cluster_centers = new_cluster_centers  # 更新为最终的中心
+                break  # 聚类中心已收敛，退出循环
+
+            # 更新聚类中心
+            self.cluster_centers = new_cluster_centers
+            iteration_count += 1
+
+        # 4. 构建并返回最终的簇信息
+        return self.__build_cluster_results(grouped_points)
+
+    def __build_cluster_results(self, points_grouped_by_cluster):
+        """
+        根据分组后的点和最终的聚类中心，构建最终的簇信息。
+
+        Args:
+            points_grouped_by_cluster (list): 一个列表的列表，每个内部列表包含一个簇的所有数据点。
+
+        Returns:
+            list: 包含簇信息的列表，每个簇的格式为 (points_in_cluster, average_distance, center)。
+        """
+        clusters_info = []
+        for center_index, cluster_points in enumerate(points_grouped_by_cluster):
+            current_center = self.cluster_centers[center_index]
+            # 计算簇内所有点到其中心的平均距离
+            # 如果簇为空，平均距离为0，中心为NaN（np.mean会处理）
+            if not cluster_points:
+                avg_distance = 0.0
+            else:
+                avg_distance = self.__calculate_sum_of_distances(cluster_points, current_center) / len(cluster_points)
+
+            clusters_info.append((cluster_points, avg_distance, current_center))
+        return clusters_info
+
+    def __calculate_sum_of_distances(self, points_list, center):
+        """
+        计算列表中所有点到指定中心的距离之和。
+
+        Args:
+            points_list (list): 数据点的列表。
+            center (np.ndarray): 中心点。
+
+        Returns:
+            float: 所有点到中心的距离之和。
+        """
+        total_distance = 0.0
+        for point in points_list:
+            total_distance += self.__calculate_euclidean_distance(point, center)
+        return total_distance
+
+    def __calculate_euclidean_distance(self, point1, point2):
+        """
+        计算两个点之间的欧几里得距离。
+
+        Args:
+            point1 (np.ndarray): 第一个点。
+            point2 (np.ndarray): 第二个点。
+
+        Returns:
+            float: 两点之间的欧几里得距离。
+        """
+        # 计算两点之差的平方和
+        squared_diff = np.sum((point1 - point2)**2)
+        # 开平方根得到距离
+        return np.sqrt(squared_diff)
+
+    def __select_initial_centers(self, data_points, num_clusters):
+        """
+        从数据点中随机选择K个点作为初始聚类中心。
+
+        Args:
+            data_points (np.ndarray): 输入的数据点。
+            num_clusters (int): 要选择的中心数量。
+
+        Returns:
+            np.ndarray: 包含初始聚类中心的Numpy数组。
+        """
+        # random.sample 保证不会选择重复的索引
+        sample_indices = random.sample(range(data_points.shape[0]), num_clusters)
+        # 根据随机索引提取对应的数据点作为初始中心
+        initial_centers = data_points[sample_indices]
+        return initial_centers
+
+# --- 测试数据和调用 ---
+
+# 定义测试数据：生成一个包含30个数据点，每个数据点有4个特征的随机数组
+# 这里的参数 (30, 4) 表示：30个数据点，每个数据点有4个维度/特征。
+test_data = np.random.rand(30, 4)
+
+# 定义要形成的簇的数量
+number_of_clusters = 6
+
+# 创建 KMeansClusterer 实例
+# 参数：
+#   - test_data: 输入的30x4的Numpy数组。
+#   - number_of_clusters: 指定要分成6个簇。
+kmeans_processor = KMeansClusterer(test_data, number_of_clusters)
+
+# 执行聚类
+clusters = kmeans_processor.cluster()
+
+# 对结果进行排序，通常按簇内平均距离升序排列
+# lambda cls: cls[1] 表示使用每个簇元组的第二个元素（平均距离）作为排序键
+sorted_clusters = sorted(clusters, key=lambda cls: cls[1])
+
+# 打印每个簇的信息
+print("--- K-Means 聚类结果 (按平均距离排序) ---")
+for i, (cluster_points, avg_distance, center) in enumerate(sorted_clusters):
+    print(f"簇 {i+1}:")
+    # print("  数据点:")
+    # pprint.pprint(cluster_points)  # 打印簇内的所有数据点
+    print(f"  平均距离到中心: {avg_distance:.4f}") # 打印平均距离，保留4位小数
+    print(f"  聚类中心: {center}") # 打印聚类中心
+    print("-" * 20) # 分隔线

@@ -1,0 +1,201 @@
+from collections import Counter
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+
+# 1. 数据预处理
+class TextProcessor:
+    def __init__(self):
+        self.chars = []
+        self.char_to_idx = {}  # 字符到索引的映射字典
+        self.idx_to_char = {}  # 索引到字符的映射字典
+
+    # 构建词汇表
+    def build_vocab(self, texts):
+        # 收集所有字符
+        all_chars = set(''.join(texts))
+        self.chars = sorted(list(all_chars))
+
+        # 创建字符到索引的映射
+        self.char_to_idx = {char: idx for idx, char in enumerate(self.chars)}
+        self.idx_to_char = {idx: char for idx, char in enumerate(self.chars)}
+
+        print(f"词汇表大小: {len(self.chars)}")
+        print(f"字符集合: {self.chars}")
+
+    def text_to_indices(self, text):
+        return [self.char_to_idx.get(char, 0) for char in text]
+
+    def indices_to_text(self, indices):
+        return ''.join([self.idx_to_char.get(idx, '') for idx in indices])
+
+
+# 2. 基础RNN模型
+class RNNModel(nn.Module):
+    def __init__(self, vocab_size, embedding_dim=50, hidden_dim=100, output_dim=1):
+        super(RNNModel, self).__init__()
+
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.rnn = nn.RNN(embedding_dim, hidden_dim, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # x shape: (batch_size, sequence_length)
+        embedded = self.embedding(x)  # (batch_size, seq_len, embedding_dim)
+        rnn_out, hidden = self.rnn(embedded)  # (batch_size, seq_len, hidden_dim)
+
+        # 只取最后一个时间步的输出
+        output = self.fc(rnn_out[:, -1, :])  # (batch_size, 1)
+        output = self.sigmoid(output)
+
+        return output
+
+
+# 3. 生成训练数据
+def generate_training_data(text_processor, texts, target_char, window_size=5):
+    """
+    生成训练数据：输入文本窗口，输出目标字符是否在窗口中的位置（0-1）
+    """
+    X, y = [], []
+
+    for text in texts:
+        # 将文本转换为索引
+        indices = text_processor.text_to_indices(text)
+
+        # 遍历每个可能的窗口
+        for i in range(len(indices) - window_size + 1):
+            window = indices[i:i + window_size]
+            X.append(window)
+
+            # 检查目标字符是否在当前窗口中
+            if target_char in text[i:i + window_size]:
+                # 计算字符在窗口中的相对位置（0表示第一个字符，1表示第二个字符，以此类推）
+                pos = text[i:i + window_size].find(target_char)
+                y.append(pos / (window_size - 1))  # 归一化到[0,1]
+            else:
+                y.append(-1)  # 表示没有找到字符
+
+    return np.array(X), np.array(y)
+
+
+# 4. 训练函数
+def train_model(model, X_train, y_train, num_epochs=100, learning_rate=0.01):
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    model.train()
+    for epoch in range(num_epochs):
+        optimizer.zero_grad()
+
+        # 转换为tensor
+        X_tensor = torch.LongTensor(X_train)
+        y_tensor = torch.FloatTensor(y_train).unsqueeze(1)
+
+        # 前向传播
+        outputs = model(X_tensor)
+
+        # 计算损失（只计算有标签的数据）
+        mask = y_train != -1
+        if np.sum(mask) > 0:
+            loss = criterion(outputs[mask], y_tensor[mask])
+            loss.backward()
+            optimizer.step()
+
+            if epoch % 20 == 0:
+                print(f'Epoch [{epoch}/{num_epochs}], Loss: {loss.item():.4f}')
+
+    return model
+
+
+# 5. 预测函数
+def predict_position(model, text_processor, text, target_char, window_size=5):
+    """
+    预测特定字符在文本中的位置
+    """
+    model.eval()
+
+    # 将文本转换为索引
+    indices = text_processor.text_to_indices(text)
+
+    predictions = []
+    positions = []
+
+    # 对每个窗口进行预测
+    for i in range(len(indices) - window_size + 1):
+        window = indices[i:i + window_size]
+        window_tensor = torch.LongTensor([window])
+
+        with torch.no_grad():
+            output = model(window_tensor)
+            pred_pos = output.item()
+
+            # 如果预测值有效，则转换为实际位置
+            if 0 <= pred_pos <= 1:
+                actual_pos = int(pred_pos * (window_size - 1))
+                predictions.append(actual_pos)
+                positions.append(i + actual_pos)
+
+    return predictions, positions
+
+
+# 6. 主程序
+def main():
+    # 准备训练数据
+    texts = [
+        "hello world",
+        "this is a test",
+        "machine learning",
+        "neural networks",
+        "artificial intelligence",
+        "data science",
+        "python programming",
+        "deep learning",
+        "natural language processing",
+        "computer vision"
+    ]
+
+    # 初始化处理器
+    processor = TextProcessor()
+    processor.build_vocab(texts)
+
+    # 设置目标字符
+    target_char = 'i'
+
+    # 生成训练数据
+    X_train, y_train = generate_training_data(processor, texts, target_char, window_size=5)
+
+    print(f"训练样本数量: {len(X_train)}")
+    print(f"前5个样本: {X_train[:5]}")
+    print(f"前5个标签: {y_train[:5]}")
+
+    # 创建模型
+    vocab_size = len(processor.chars)
+    model = RNNModel(vocab_size, embedding_dim=50, hidden_dim=100)
+
+    # 训练模型
+    print("开始训练模型...")
+    trained_model = train_model(model, X_train, y_train, num_epochs=100, learning_rate=0.01)
+
+    # 测试预测
+    test_text = "machine learning is amazing"
+    print(f"\n测试文本: '{test_text}'")
+    print(f"目标字符: '{target_char}'")
+
+    predictions, positions = predict_position(trained_model, processor, test_text, target_char, window_size=5)
+
+    print(f"预测结果: {predictions}")
+    print(f"字符位置: {positions}")
+
+    # 显示详细分析
+    print("\n详细分析:")
+    for i, pos in enumerate(positions):
+        if pos < len(test_text):
+            print(f"窗口 {i}: '{test_text[pos - 2:pos + 3]}' -> 字符 '{target_char}' 在位置 {pos}")
+
+
+if __name__ == "__main__":
+    main()

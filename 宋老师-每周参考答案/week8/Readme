@@ -1,1 +1,0 @@
-将loader文件和model文件替换到课上的表示型文本匹配代码路径中，就可以执行基于tripletloss的训练
